@@ -93,7 +93,6 @@ curl http://localhost:8000/v1/users/12345
 
 - Full async/await support (requests is synchronous)
 - Won't block FastAPI's event loop
-- Connection pooling for better performance
 - Modern API consistent with requests
 - Better timeout handling
 
@@ -102,7 +101,7 @@ curl http://localhost:8000/v1/users/12345
 ### Logging: Structured JSON Logging
 
 
-- Machine-readable for log aggregation tools (ELK, Splunk)
+- Machine-readable for log aggregation tools 
 - Context-aware with extra fields
 - Easy to query and filter
 - Production-ready format
@@ -132,7 +131,7 @@ curl http://localhost:8000/v1/users/12345
 
 ## Trade-offs and Challenges
 
-### 🔴 **Critical Limitations**
+###  **Critical Limitations**
 
 #### 1. In-Memory Storage (Data Loss on Restart)
 
@@ -160,12 +159,11 @@ curl http://localhost:8000/v1/users/12345
 - Optional API key provides basic auth
 
 
-### 🟠 **High Priority Challenges**
+### **High Priority Challenges**
 
 #### 4. Optional API Key Authentication
 
 - Easy development (no auth setup required)
-- Faster iteration during POC
 
 
 
@@ -192,7 +190,6 @@ curl http://localhost:8000/v1/users/12345
 
 - Persistence across restarts
 - Fast lookups (still O(1))
-- TTL-based data expiration
 - Can scale horizontally
 
 **Option B: PostgreSQL**
@@ -223,11 +220,6 @@ curl http://localhost:8000/v1/users/12345
 - Add circuit breaker
 
 
-#### Priority 5: Observability 
-
-- Add request ID correlation
-- Add metrics
-- Add distributed tracing
 
 #### Priority 6: Production Readiness 
 
