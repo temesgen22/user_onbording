@@ -168,7 +168,7 @@ curl http://localhost:8000/v1/users/12345
 
 
 
-#### 6. No Rate Limiting
+#### 5. No Rate Limiting
 
 - Simplified initial implementation
 - Assumed trusted clients
