@@ -1,6 +1,3 @@
-"""
-Custom exception classes for better error handling.
-"""
 
 from typing import Optional
 
@@ -23,7 +20,7 @@ class OktaUserNotFoundError(OktaAPIError):
     """Raised when Okta user is not found."""
     
     def __init__(self, email: str):
-        super().__init__(f"Okta user not found for email: {email}", status_code=404, email=email)
+        super().__init__(f"Okta user not found:", status_code=404, email=email)
 
 
 class OktaConfigurationError(OktaAPIError):

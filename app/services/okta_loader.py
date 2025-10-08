@@ -1,6 +1,3 @@
-"""
-Okta API client for fetching user data asynchronously.
-"""
 
 import logging
 from typing import Optional, Dict, List, Any
@@ -8,6 +5,7 @@ import httpx
 
 from ..schemas import OktaUser, OktaProfile
 from ..config import get_settings
+from ..security import scrub_pii
 from ..exceptions import OktaAPIError, OktaUserNotFoundError, OktaConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -28,21 +26,7 @@ async def _find_okta_user_by_email(
     token: str,
     timeout: int
 ) -> Optional[Dict[str, Any]]:
-    """
-    Find Okta user by email address.
-    
-    Args:
-        email: User email address to search for
-        base_url: Okta organization URL
-        token: Okta API token
-        timeout: Request timeout in seconds
-        
-    Returns:
-        User data dict if found, None otherwise
-        
-    Raises:
-        OktaAPIError: If API call fails
-    """
+
     headers = _auth_headers(token)
     
     try:
@@ -57,16 +41,16 @@ async def _find_okta_user_by_email(
             
             users = resp.json()
             if isinstance(users, list) and users:
-                logger.info(f"Found Okta user for email: {email}")
+                logger.info("Found Okta user", extra=scrub_pii({"email": email}))
                 return users[0]
             
-            logger.warning(f"No Okta user found for email: {email}")
+            logger.warning("No Okta user found", extra=scrub_pii({"email": email}))
             return None
             
     except httpx.HTTPStatusError as e:
         logger.error(
-            f"Okta API returned error status for email {email}: {e.response.status_code}",
-            extra={"email": email, "status_code": e.response.status_code}
+            f"Okta API returned error status: {e.response.status_code}",
+            extra=scrub_pii({"email": email, "status_code": e.response.status_code})
         )
         raise OktaAPIError(
             f"Okta API error: {e.response.status_code}",
@@ -74,18 +58,18 @@ async def _find_okta_user_by_email(
             email=email
         )
     except httpx.TimeoutException as e:
-        logger.error(f"Okta API timeout for email {email}", extra={"email": email})
+        logger.error("Okta API timeout", extra=scrub_pii({"email": email}))
         raise OktaAPIError(f"Okta API timeout", email=email)
     except httpx.RequestError as e:
         logger.error(
-            f"Okta API request failed for email {email}: {str(e)}",
-            extra={"email": email, "error": str(e)}
+            f"Okta API request failed: {str(e)}",
+            extra=scrub_pii({"email": email, "error": str(e)})
         )
         raise OktaAPIError(f"Okta API request failed: {str(e)}", email=email)
     except Exception as e:
         logger.error(
-            f"Unexpected error finding Okta user for email {email}: {str(e)}",
-            extra={"email": email, "error": str(e)}
+            f"Unexpected error finding Okta user: {str(e)}",
+            extra=scrub_pii({"email": email, "error": str(e)})
         )
         raise OktaAPIError(f"Unexpected error: {str(e)}", email=email)
 
@@ -96,18 +80,7 @@ async def _get_user_groups(
     token: str,
     timeout: int
 ) -> List[str]:
-    """
-    Fetch user's group memberships from Okta.
-    
-    Args:
-        user_id: Okta user ID
-        base_url: Okta organization URL
-        token: Okta API token
-        timeout: Request timeout in seconds
-        
-    Returns:
-        List of group names
-    """
+
     headers = _auth_headers(token)
     
     try:
@@ -165,18 +138,7 @@ async def _get_user_applications(
     token: str,
     timeout: int
 ) -> List[str]:
-    """
-    Fetch user's application assignments from Okta.
-    
-    Args:
-        user_id: Okta user ID
-        base_url: Okta organization URL
-        token: Okta API token
-        timeout: Request timeout in seconds
-        
-    Returns:
-        List of application names
-    """
+
     headers = _auth_headers(token)
     
     try:
@@ -246,7 +208,7 @@ async def load_okta_user_by_email(email: str) -> Optional[OktaUser]:
         logger.error(f"Failed to load Okta configuration: {str(e)}")
         raise OktaConfigurationError(f"Okta configuration error: {str(e)}")
     
-    logger.info(f"Loading Okta user data for email: {email}")
+    logger.info("Loading Okta user data", extra=scrub_pii({"email": email}))
     
     # Find user by email
     user = await _find_okta_user_by_email(email, base_url, token, timeout)
@@ -258,8 +220,8 @@ async def load_okta_user_by_email(email: str) -> Optional[OktaUser]:
     
     if not user_id or not isinstance(profile, dict):
         logger.error(
-            f"Invalid Okta user data structure for email {email}",
-            extra={"email": email, "has_id": bool(user_id), "has_profile": isinstance(profile, dict)}
+            f"Invalid Okta user data structure",
+            extra=scrub_pii({"email": email, "has_id": bool(user_id), "has_profile": isinstance(profile, dict)})
         )
         raise OktaAPIError(f"Invalid Okta user data structure", email=email)
     
@@ -283,17 +245,17 @@ async def load_okta_user_by_email(email: str) -> Optional[OktaUser]:
     try:
         okta_user = OktaUser.model_validate(modeled)
         logger.info(
-            f"Successfully loaded Okta user for email {email}",
-            extra={
+            "Successfully loaded Okta user",
+            extra=scrub_pii({
                 "email": email,
                 "groups_count": len(groups),
                 "apps_count": len(applications)
-            }
+            })
         )
         return okta_user
     except Exception as e:
         logger.error(
-            f"Failed to validate Okta user data for email {email}: {str(e)}",
-            extra={"email": email, "error": str(e)}
+            f"Failed to validate Okta user data: {str(e)}",
+            extra=scrub_pii({"email": email, "error": str(e)})
         )
         raise OktaAPIError(f"Failed to validate Okta user data: {str(e)}", email=email)

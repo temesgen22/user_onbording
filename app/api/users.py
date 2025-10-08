@@ -27,7 +27,7 @@ async def get_user(user_id: str, store: InMemoryUserStore = Depends(get_user_sto
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User not found"  # Don't expose user_id in error
+            detail=f"User not found"
         )
     
     logger.info(

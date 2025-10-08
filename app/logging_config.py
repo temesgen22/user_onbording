@@ -1,6 +1,4 @@
-"""
-Structured logging configuration with JSON support.
-"""
+
 
 import logging
 import sys
@@ -88,8 +86,8 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
     
-    # File handler
-    file_handler = logging.FileHandler(logs_dir / "app.log")
+    # File handler (explicitly use UTF-8 encoding for cross-platform compatibility)
+    file_handler = logging.FileHandler(logs_dir / "app.log", encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)

@@ -1,7 +1,3 @@
-"""
-Configuration management using Pydantic Settings.
-Validates required environment variables at startup.
-"""
 
 import os
 from typing import Literal, Optional
@@ -15,7 +11,7 @@ class Settings(BaseSettings):
     # Okta Configuration
     okta_org_url: str = Field(
         ...,
-        description="Okta organization URL (e.g., https://dev-123456.okta.com)",
+        description="Okta organization URL (e.g., https://trial-123456.okta.com)",
         validation_alias="OKTA_ORG_URL"
     )
     okta_api_token: str = Field(
@@ -27,7 +23,7 @@ class Settings(BaseSettings):
     # API Security
     api_key: Optional[str] = Field(
         default=None,
-        description="API key for webhook authentication",
+        description="API key for webhook authentication (optional)",
         validation_alias="API_KEY"
     )
     

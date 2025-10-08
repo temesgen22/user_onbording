@@ -38,7 +38,11 @@ ENV/
 *.swo
 *~
 .DS_Store
-
+# Test files and folders
+tests/
+test_*.py
+pytest.ini
+*_test.py
 # Testing
 .pytest_cache/
 .coverage
@@ -58,3 +62,9 @@ Thumbs.db
 data/*.json
 !data/hr_user.json
 
+#unrelated documents
+# Ignore all Markdown files
+*.md
+
+# But keep README.md
+!README.md

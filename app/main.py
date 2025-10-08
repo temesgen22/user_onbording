@@ -1,6 +1,3 @@
-"""
-FastAPI application factory and main entry point.
-"""
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -114,7 +111,6 @@ def create_app() -> FastAPI:
     # Global exception handler for unhandled exceptions
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        """Handle all unhandled exceptions."""
         logger.error(
             f"Unhandled exception: {str(exc)}",
             extra={"path": request.url.path, "error": str(exc)},

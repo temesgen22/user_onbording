@@ -1,6 +1,4 @@
-"""
-Authentication and security middleware.
-"""
+
 
 from fastapi import Request, HTTPException, status
 from fastapi.security import APIKeyHeader
