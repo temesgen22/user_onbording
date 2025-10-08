@@ -71,3 +71,22 @@ class EnrichedUser(BaseModel):
         )
 
 
+class WebhookAcceptedResponse(BaseModel):
+    """Response model for accepted webhook with background processing."""
+    status: str = "accepted"
+    message: str
+    employee_id: str
+    email: EmailStr
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": "accepted",
+                "message": "User enrichment queued for background processing",
+                "employee_id": "12345",
+                "email": "jane.doe@example.com"
+            }
+        }
+    )
+
+

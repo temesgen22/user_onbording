@@ -26,7 +26,7 @@ class TestHRWebhookEndpoint:
     """Test HR webhook endpoint."""
     
     def test_hr_webhook_success(self, client, sample_hr_user, sample_okta_user):
-        """Test successful HR webhook processing."""
+        """Test successful HR webhook acceptance with background processing."""
         # Mock the Okta loader to return our sample data
         mock_okta_user = OktaUser(**sample_okta_user)
         
@@ -36,32 +36,64 @@ class TestHRWebhookEndpoint:
             assert response.status_code == 202
             data = response.json()
             
-            # Verify the enriched user data
-            assert data["id"] == "12345"
-            assert data["name"] == "Jane Doe"
+            # Verify the webhook was accepted (not the enriched data)
+            assert data["status"] == "accepted"
+            assert data["employee_id"] == "12345"
             assert data["email"] == "test.user@example.com"
-            assert data["title"] == "Software Engineer"
-            assert data["department"] == "Engineering"
-            assert data["startDate"] == "2024-01-15"
-            assert data["onboarded"] is True
-            assert "Engineering" in data["groups"]
-            assert "Google Workspace" in data["applications"]
+            assert "queued" in data["message"].lower()
+    
+    def test_hr_webhook_background_enrichment(self, client, sample_hr_user, sample_okta_user):
+        """Test that background enrichment actually completes and stores data."""
+        # Mock the Okta loader to return our sample data
+        mock_okta_user = OktaUser(**sample_okta_user)
+        
+        with patch('app.api.hr.load_okta_user_by_email', return_value=mock_okta_user):
+            # Send webhook
+            response = client.post("/v1/hr/webhook", json=sample_hr_user)
+            assert response.status_code == 202
+            
+            # With TestClient, background tasks complete before response is returned
+            # So we can immediately retrieve the enriched user
+            get_response = client.get("/v1/users/12345")
+            assert get_response.status_code == 200
+            
+            enriched_data = get_response.json()
+            assert enriched_data["id"] == "12345"
+            assert enriched_data["name"] == "Jane Doe"
+            assert enriched_data["email"] == "test.user@example.com"
+            assert enriched_data["title"] == "Software Engineer"
+            assert enriched_data["department"] == "Engineering"
+            assert enriched_data["startDate"] == "2024-01-15"
+            assert enriched_data["onboarded"] is True
+            assert "Engineering" in enriched_data["groups"]
+            assert "Google Workspace" in enriched_data["applications"]
     
     def test_hr_webhook_okta_user_not_found(self, client, sample_hr_user):
-        """Test HR webhook when Okta user is not found."""
-        with patch('app.api.hr.load_okta_user_by_email', return_value=None):
+        """Test HR webhook when Okta user is not found in background processing."""
+        from app.exceptions import OktaUserNotFoundError
+        
+        # Use a unique employee_id to avoid conflicts with other tests
+        sample_hr_user["employee_id"] = "99999"
+        
+        # Mock to raise an exception
+        with patch('app.api.hr.load_okta_user_by_email', side_effect=OktaUserNotFoundError("test@example.com")):
+            # Webhook should still accept (202) but background task will fail
             response = client.post("/v1/hr/webhook", json=sample_hr_user)
             
-            assert response.status_code == 404
+            assert response.status_code == 202
             data = response.json()
-            assert "detail" in data
-            assert "not found" in data["detail"].lower()
+            assert data["status"] == "accepted"
+            assert data["employee_id"] == "99999"
+            
+            # User should NOT be in the store after background task fails
+            get_response = client.get("/v1/users/99999")
+            assert get_response.status_code == 404
     
     def test_hr_webhook_invalid_data(self, client):
         """Test HR webhook with invalid data."""
         invalid_data = {
             "employee_id": "12345",
-            # Missing required fields
+            # Missing required fields (first_name, last_name, email)
         }
         
         response = client.post("/v1/hr/webhook", json=invalid_data)
@@ -121,30 +153,31 @@ class TestIntegration:
     """Integration tests for the complete flow."""
     
     def test_complete_webhook_and_retrieve_flow(self, client, sample_hr_user, sample_okta_user):
-        """Test the complete flow: webhook -> store -> retrieve."""
+        """Test the complete flow: webhook acceptance -> background enrichment -> retrieve."""
         # Mock Okta data
         mock_okta_user = OktaUser(**sample_okta_user)
         
         with patch('app.api.hr.load_okta_user_by_email', return_value=mock_okta_user):
-            # Step 1: Send webhook
+            # Step 1: Send webhook (returns immediately)
             webhook_response = client.post("/v1/hr/webhook", json=sample_hr_user)
             assert webhook_response.status_code == 202
             
             webhook_data = webhook_response.json()
-            user_id = webhook_data["id"]
+            assert webhook_data["status"] == "accepted"
+            assert webhook_data["employee_id"] == "12345"
             
-            # Step 2: Retrieve the user
-            get_response = client.get(f"/v1/users/{user_id}")
+            # Step 2: Retrieve the user (background task has completed in TestClient)
+            get_response = client.get("/v1/users/12345")
             assert get_response.status_code == 200
             
             get_data = get_response.json()
             
-            # Verify the data is consistent
-            assert get_data["id"] == webhook_data["id"]
-            assert get_data["name"] == webhook_data["name"]
-            assert get_data["email"] == webhook_data["email"]
-            assert get_data["groups"] == webhook_data["groups"]
-            assert get_data["applications"] == webhook_data["applications"]
+            # Verify the enriched data
+            assert get_data["id"] == "12345"
+            assert get_data["name"] == "Jane Doe"
+            assert get_data["email"] == "test.user@example.com"
+            assert len(get_data["groups"]) > 0
+            assert len(get_data["applications"]) > 0
     
     def test_webhook_with_different_emails(self, client, sample_hr_user, sample_okta_user):
         """Test webhook with different email addresses."""
@@ -155,9 +188,16 @@ class TestIntegration:
         mock_okta_user = OktaUser(**sample_okta_user)
         
         with patch('app.api.hr.load_okta_user_by_email', return_value=mock_okta_user):
+            # Webhook accepts immediately
             response = client.post("/v1/hr/webhook", json=sample_hr_user)
-            
-            # Should still work, but the enriched user will have HR email
             assert response.status_code == 202
-            data = response.json()
-            assert data["email"] == "hr.user@example.com"  # HR email takes precedence
+            
+            webhook_data = response.json()
+            assert webhook_data["email"] == "hr.user@example.com"
+            
+            # Retrieve enriched user after background processing
+            get_response = client.get("/v1/users/12345")
+            assert get_response.status_code == 200
+            
+            enriched_data = get_response.json()
+            assert enriched_data["email"] == "hr.user@example.com"  # HR email takes precedence
