@@ -64,6 +64,12 @@ curl http://localhost:8000/v1/users/12345
 
 ### Design notes
 
+- **4-Tier Layered Architecture (N-Tier)**:
+  1. **API Layer** (`app/api/`) - HTTP request/response handling
+  2. **Service Layer** (`app/services/`) - Business logic and external integrations
+  3. **Data Layer** (`app/store.py`) - Storage abstraction with repository pattern
+  4. **Model Layer** (`app/schemas.py`) - Data validation and transfer objects
+ 
 - **Privacy Protection**: 
   - PII scrubbing in logs (emails masked, IDs hashed) for GDPR compliance
 - **Background Processing**: Webhook accepts requests immediately and processes enrichment asynchronously using FastAPI BackgroundTasks
@@ -73,7 +79,7 @@ curl http://localhost:8000/v1/users/12345
 - **Schemas** via Pydantic v2, request/response models with explicit types.
 - **Separation of concerns**: schemas, services (`okta_loader`), and store.
 - **Structured logging** and proper HTTP status codes (`202`, `404`).
-- **Deterministic enrichment**: output aligns with example format.
+
 
 ---
 
@@ -84,7 +90,7 @@ curl http://localhost:8000/v1/users/12345
 - Modern async Python framework with non-blocking I/O
 - Automatic OpenAPI documentation
 - Pydantic v2 and pyndantic setting integration for data validation and configuration
-- High performance (comparable to Node.js/Go)
+- High performance 
 - Modern Python type hints throughout
 
 
