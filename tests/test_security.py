@@ -342,7 +342,7 @@ class TestWebhookSignature:
     
     def test_signature_with_special_characters(self):
         """Test signature generation with special characters in payload."""
-        payload = b'{"name": "Test User", "email": "test@example.com", "special": "\u00e9\u00e8"}'
+        payload = b'{"name": "Test User", "email": "test@example.com", "special": "\\u00e9\\u00e8"}'
         secret = "test-secret"
         
         signature = generate_webhook_signature(payload, secret)

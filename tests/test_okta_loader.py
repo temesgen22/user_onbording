@@ -312,7 +312,7 @@ class TestLoadOktaUserByEmail:
         """Test loading when user data structure is invalid."""
         mock_user_data = {
             "id": "user123",
-            "profile": None  # Invalid profile
+            "profile": None  # Invalid profile - will become {} and fail validation
         }
         
         test_settings = Settings(
@@ -324,7 +324,8 @@ class TestLoadOktaUserByEmail:
         with patch('app.services.okta_loader.get_settings', return_value=test_settings), \
              patch('app.services.okta_loader._find_okta_user_by_email', return_value=mock_user_data):
             
-            with pytest.raises(OktaAPIError, match="Invalid Okta user data structure"):
+            # Profile=None becomes {}, which fails Pydantic validation later
+            with pytest.raises(OktaAPIError, match="Failed to validate Okta user data"):
                 await load_okta_user_by_email("test@example.com")
     
     @pytest.mark.asyncio
