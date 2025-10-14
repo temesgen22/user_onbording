@@ -46,6 +46,45 @@ class Settings(BaseSettings):
         validation_alias="API_TIMEOUT_SECONDS"
     )
     
+    # Storage Configuration
+    storage_backend: Literal["memory", "redis"] = Field(
+        default="memory",
+        description="Storage backend to use (memory or redis)",
+        validation_alias="STORAGE_BACKEND"
+    )
+    
+    # Redis Configuration (only used when storage_backend='redis')
+    redis_host: str = Field(
+        default="192.168.1.130",
+        description="Redis host address",
+        validation_alias="REDIS_HOST"
+    )
+    redis_port: int = Field(
+        default=6379,
+        description="Redis port",
+        validation_alias="REDIS_PORT"
+    )
+    redis_db: int = Field(
+        default=0,
+        description="Redis database number",
+        validation_alias="REDIS_DB"
+    )
+    redis_password: Optional[str] = Field(
+        default=None,
+        description="Redis password (optional)",
+        validation_alias="REDIS_PASSWORD"
+    )
+    redis_key_prefix: str = Field(
+        default="user_onboarding:",
+        description="Prefix for Redis keys",
+        validation_alias="REDIS_KEY_PREFIX"
+    )
+    redis_connection_timeout: int = Field(
+        default=5,
+        description="Redis connection timeout in seconds",
+        validation_alias="REDIS_CONNECTION_TIMEOUT"
+    )
+    
     @field_validator("okta_org_url")
     @classmethod
     def validate_okta_url(cls, v: str) -> str:

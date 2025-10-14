@@ -1,6 +1,6 @@
 ## User Onboarding Integration API
 
-A minimal FastAPI service that accepts HR user data via webhook, enriches it with Okta data fetched from Okta's API, stores it in-memory, and serves the enriched user via an API.
+A minimal FastAPI service that accepts HR user data via webhook, enriches it with Okta data fetched from Okta's API, stores it (in-memory or Redis), and serves the enriched user via an API.
 
 ### Endpoints
 
@@ -17,26 +17,40 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Configure Okta
+### Configure Application
 
-Set the following environment variables so the service can call Okta:
+Create a `.env` file in the project root with the following settings:
 
 ```bash
-# PowerShell
-$env:OKTA_ORG_URL = "https://dev-123456.okta.com"
-$env:OKTA_API_TOKEN = "<your-ssws-token>"
+# Okta Configuration (Required)
+OKTA_ORG_URL=https://dev-123456.okta.com
+OKTA_API_TOKEN=<your-ssws-token>
+
+# API Security (Optional)
+API_KEY=<your-secret-api-key>
+
+# Storage Backend (Optional - defaults to "memory")
+STORAGE_BACKEND=memory  # Options: "memory" or "redis"
+
+# Redis Configuration (only used when STORAGE_BACKEND=redis)
+REDIS_HOST=192.168.1.130
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
+REDIS_KEY_PREFIX=user_onboarding:
+REDIS_CONNECTION_TIMEOUT=5
 ```
 
-Optional security configuration:
-```bash
-# Optional: API key for webhook authentication (recommended for production)
-$env:API_KEY = "<your-secret-api-key>"
-```
-
-Notes:
+**Okta Configuration Notes:**
 - The service searches users by `profile.email` only.
 - **Required**: You must configure valid Okta API credentials for the service to work.
 - Required scopes: API token must have permissions to read users, groups, and app links.
+
+**Storage Options:**
+- **`memory`** (default): Fast, simple, but data lost on restart. Good for development.
+- **`redis`**: Persistent storage, survives restarts. Recommended for production.
+
+See `ENV_CONFIG_EXAMPLES.md` and `REDIS_SETUP.md` for detailed configuration guides.
 
 ### Simulate webhook
 
@@ -125,13 +139,27 @@ curl http://localhost:8000/v1/users/12345
 - Improves reliability without manual intervention
 
 
-### Storage: In-Memory (Intentional Limitation)
+### Storage: Configurable Backend (In-Memory or Redis)
 
--  Simplest possible implementation
+**In-Memory Storage** (Default):
+-  Simplest implementation
 -  Zero external dependencies
--  Fast lookups (O(1))
--  Easy to test and develop
--  Easy to swap later (dependency injection pattern used)
+-  Fastest lookups (O(1), ~1-10 μs)
+-  Perfect for development and testing
+-  Data lost on restart
+
+**Redis Storage** (Production-Ready):
+-  Persistent storage across restarts
+-  Fast lookups (O(1), ~1-10 ms)
+-  Horizontally scalable
+-  Supports multiple application instances
+-  Requires Redis server
+
+**Architecture:**
+-  Repository pattern with abstract `UserStore` base class
+-  Dependency injection for easy swapping
+-  No code changes needed - just configuration
+-  Fully tested for both backends
 
 ---
 
@@ -139,12 +167,19 @@ curl http://localhost:8000/v1/users/12345
 
 ###  **Critical Limitations**
 
-#### 1. In-Memory Storage (Data Loss on Restart)
+#### 1. Storage Backend Selection
 
-**Impact:**
+**In-Memory Storage (Default):**
 - Complete data loss on service restart/crash
 - Cannot scale horizontally (single instance only)
 - No persistence across deployments
+- **Mitigation:** Use Redis storage backend for production
+
+**Redis Storage (Available):**
+- ✅ Data persists across restarts
+- ✅ Can scale horizontally
+- ✅ Production-ready
+- Requires Redis server infrastructure
 
 
 #### 2. Background Processing Complexity
@@ -186,23 +221,23 @@ curl http://localhost:8000/v1/users/12345
 ## Future Improvements
 
 
-#### Priority 1: Data Persistence 
+#### Priority 1: Additional Storage Backends ✅ (Partially Complete)
 
-**Problem:** In-memory store is not production-ready
+**Status:** Redis backend implemented ✅
 
-**Solutions:**
+**Remaining Options:**
 
-**Option A: Redis**
-
-- Persistence across restarts
-- Fast lookups (still O(1))
-- Can scale horizontally
-
-**Option B: PostgreSQL**
+**PostgreSQL:**
 - Full SQL query capabilities
 - Transactional integrity
 - Historical data tracking
 - Audit trail support
+- Complex queries and reporting
+
+**Current Solution:**
+- ✅ In-Memory storage (default)
+- ✅ Redis storage (implemented)
+- ⏳ PostgreSQL (future enhancement)
 
 #### Priority 2: Reliability Improvements 
 
@@ -242,6 +277,9 @@ curl http://localhost:8000/v1/users/12345
 
 - Python 3.10+
 - Windows PowerShell (examples provided) or any shell with `curl`
+- Redis (optional, for persistent storage)
+- Docker (optional, for containerized deployment)
+- Jenkins (optional, for CI/CD)
 
 ### Project structure
 
@@ -255,11 +293,24 @@ app/
   main.py           # App factory, logging, router inclusion, /v1/healthz
   schemas.py        # Pydantic models (HRUserIn, OktaUser, EnrichedUser)
   dependencies.py   # get_user_store() DI provider
-  store.py          # InMemoryUserStore
+  store.py          # UserStore (abstract), InMemoryUserStore, RedisUserStore
+  config.py         # Settings with storage backend configuration
 data/
-  hr_user.json         # Sample HR payload
+  hr_user.json           # Sample HR payload
+tests/
+  test_store.py          # In-memory storage tests
+  test_redis_store.py    # Redis storage tests
 requirements.txt
+requirements-dev.txt       # Development & testing dependencies
 README.md
+ENV_CONFIG_EXAMPLES.md     # Quick configuration examples
+REDIS_SETUP.md             # Detailed Redis setup guide
+JENKINS_SETUP.md           # CI/CD with Jenkins
+DOCKER_DEPLOYMENT.md       # Docker deployment guide
+CICD_QUICK_REFERENCE.md    # Quick reference commands
+Jenkinsfile                # CI/CD pipeline definition
+Dockerfile                 # Container image definition
+docker-compose.yml         # Multi-container orchestration
 ```
 
 ### Example payloads and responses
@@ -327,4 +378,44 @@ After background processing completes, GET `/v1/users/12345` returns:
 - GDPR compliant logging
 
 **Important:** The webhook accepts requests immediately. If enrichment fails in the background, the user will not be stored and subsequent GET requests will return 404. Check application logs for enrichment failures.
+
+---
+
+## Deployment & CI/CD
+
+### Docker Deployment
+
+The project includes Docker support for containerized deployments:
+
+```bash
+# Quick start with Docker Compose
+docker-compose up -d
+
+# Or build and run manually
+docker build -t user-onboarding-api .
+docker run -p 8000:8000 --env-file .env user-onboarding-api
+```
+
+See `DOCKER_DEPLOYMENT.md` for complete Docker deployment guide.
+
+### Jenkins CI/CD
+
+Complete CI/CD pipeline with Jenkins:
+
+- ✅ Automated testing (unit + integration)
+- ✅ Code quality checks (linting, formatting, type checking)
+- ✅ Security scanning (vulnerabilities, code analysis)
+- ✅ Docker image building
+- ✅ Automated deployments (staging + production)
+
+**Quick Setup:**
+
+1. Install Jenkins and required plugins
+2. Add credentials (Okta, API keys, Redis)
+3. Create pipeline job pointing to `Jenkinsfile`
+4. Configure GitHub webhooks (optional)
+
+See `JENKINS_SETUP.md` for step-by-step setup instructions and `CICD_QUICK_REFERENCE.md` for quick commands.
+
+---
 

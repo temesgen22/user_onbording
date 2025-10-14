@@ -13,6 +13,7 @@ from .config import init_settings, get_settings
 from .logging_config import setup_logging
 from .middleware import APIKeyMiddleware
 from .exceptions import UserOnboardingError
+from .dependencies import init_user_store
 
 # Load .env from project root
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,7 +21,6 @@ env_path = BASE_DIR / ".env"
 load_dotenv(dotenv_path=env_path)
 
 logger = logging.getLogger(__name__)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,12 +39,21 @@ async def lifespan(app: FastAPI):
                 "okta_url": settings.okta_org_url,
                 "log_level": settings.log_level,
                 "log_format": settings.log_format,
-                "api_key_configured": bool(settings.api_key)
+                "api_key_configured": bool(settings.api_key),
+                "storage_backend": settings.storage_backend
             }
         )
+        
+        # Initialize storage backend
+        store = init_user_store()
+        logger.info(
+            "Storage backend initialized",
+            extra={"storage_type": settings.storage_backend}
+        )
+        
     except Exception as e:
         logger.critical(
-            f"Failed to initialize settings: {str(e)}",
+            f"Failed to initialize application: {str(e)}",
             exc_info=True
         )
         raise
@@ -130,7 +139,8 @@ def create_app() -> FastAPI:
             return {
                 "status": "ok",
                 "version": "1.0.0",
-                "okta_configured": bool(settings.okta_org_url and settings.okta_api_token)
+                "okta_configured": bool(settings.okta_org_url and settings.okta_api_token),
+                "storage_backend": settings.storage_backend
             }
         except Exception as e:
             logger.error(f"Health check failed: {str(e)}")

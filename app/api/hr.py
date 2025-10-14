@@ -13,7 +13,7 @@ from tenacity import (
 from ..schemas import HRUserIn, EnrichedUser, WebhookAcceptedResponse
 from ..services.okta_loader import load_okta_user_by_email
 from ..dependencies import get_user_store
-from ..store import InMemoryUserStore
+from ..store import UserStore
 from ..security import scrub_pii
 from ..exceptions import (
     OktaAPIError,
@@ -74,7 +74,7 @@ async def fetch_okta_data_with_retry(email: str):
     return await load_okta_user_by_email(email)
 
 
-async def process_user_enrichment(hr_user: HRUserIn, store: InMemoryUserStore) -> None:
+async def process_user_enrichment(hr_user: HRUserIn, store: UserStore) -> None:
     """
     Background task to enrich HR user data with Okta information.
     
@@ -151,7 +151,7 @@ async def process_user_enrichment(hr_user: HRUserIn, store: InMemoryUserStore) -
 async def hr_webhook(
     hr_user: HRUserIn,
     background_tasks: BackgroundTasks,
-    store: InMemoryUserStore = Depends(get_user_store),
+    store: UserStore = Depends(get_user_store),
 ):
     """
     Accept HR user payload and queue for background enrichment.

@@ -3,7 +3,7 @@ import logging
 
 from ..schemas import EnrichedUser
 from ..dependencies import get_user_store
-from ..store import InMemoryUserStore
+from ..store import UserStore
 from ..security import scrub_pii, hash_identifier
 from ..exceptions import UserNotFoundError
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.get("/{user_id}", response_model=EnrichedUser)
-async def get_user(user_id: str, store: InMemoryUserStore = Depends(get_user_store)):
+async def get_user(user_id: str, store: UserStore = Depends(get_user_store)):
     """Retrieve an enriched user by employee ID."""
     logger.debug(f"Fetching user", extra={"user_id_hash": hash_identifier(user_id)})
     
