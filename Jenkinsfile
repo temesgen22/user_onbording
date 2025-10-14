@@ -274,8 +274,7 @@ pipeline {
             echo 'Cleaning up workspace...'
             
             // Clean up virtual environment
-            sh 'rm -rf ${VENV_DIR}'
-            
+            cleanWs() // ✅ built-in Jenkins function for safe cleanup
             // Archive important artifacts
             archiveArtifacts artifacts: 'test-results/*.xml, coverage.xml', allowEmptyArchive: true
         }
