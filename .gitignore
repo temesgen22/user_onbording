@@ -67,3 +67,4 @@ data/*.json
 
 # But keep README.md
 !README.md
+!ARCHITECTURE_DIAGRAM.md
