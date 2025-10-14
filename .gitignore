@@ -38,8 +38,7 @@ ENV/
 *.swo
 *~
 .DS_Store
-# Test files and folders
-tests/
+# Test files and folderstests/
 test_*.py
 pytest.ini
 *_test.py
