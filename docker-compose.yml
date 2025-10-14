@@ -1,0 +1,71 @@
+
+
+services:
+  # FastAPI Application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: user-onboarding-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Okta Configuration
+      OKTA_ORG_URL: ${OKTA_ORG_URL}
+      OKTA_API_TOKEN: ${OKTA_API_TOKEN}
+      
+      # API Security
+      API_KEY: ${API_KEY:-}
+      
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      
+      # Storage Backend
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-redis}
+      
+      # Redis Configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_KEY_PREFIX: "user_onboarding:"
+      REDIS_CONNECTION_TIMEOUT: 5
+    depends_on:
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Redis for persistent storage
+  redis:
+    image: redis:7-alpine
+    container_name: user-onboarding-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local
+
