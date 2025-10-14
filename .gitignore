@@ -39,7 +39,7 @@ ENV/
 *~
 .DS_Store
 # Test files and folderstests/
-test_*.py
+
 pytest.ini
 *_test.py
 # Testing
