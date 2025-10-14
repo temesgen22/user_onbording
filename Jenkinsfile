@@ -274,7 +274,9 @@ pipeline {
             echo 'Cleaning up workspace...'
             
             // Clean up virtual environment
-            cleanWs() // ✅ built-in Jenkins function for safe cleanup
+            node {
+            cleanWs()// ✅ built-in Jenkins function for safe cleanup
+            }
             // Archive important artifacts
             archiveArtifacts artifacts: 'test-results/*.xml, coverage.xml', allowEmptyArchive: true
         }
