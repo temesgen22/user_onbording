@@ -4,49 +4,15 @@ Tests for retry mechanism in HR webhook processing.
 
 import pytest
 from unittest.mock import patch, AsyncMock
-from tenacity import RetryError, stop_after_attempt
+from tenacity import RetryError
 
-from app.api.hr import fetch_okta_data_with_retry, should_retry_exception
+from app.api.hr import fetch_okta_data_with_retry
 from app.schemas import OktaUser
 from app.exceptions import (
     OktaAPIError,
     OktaUserNotFoundError,
     OktaConfigurationError
 )
-
-
-class TestShouldRetryException:
-    """Test retry decision logic."""
-    
-    def test_should_not_retry_user_not_found(self):
-        """Test that OktaUserNotFoundError is not retried."""
-        exception = OktaUserNotFoundError("test@example.com")
-        assert should_retry_exception(exception) is False
-    
-    def test_should_not_retry_configuration_error(self):
-        """Test that OktaConfigurationError is not retried."""
-        exception = OktaConfigurationError("Config error")
-        assert should_retry_exception(exception) is False
-    
-    def test_should_retry_okta_api_error(self):
-        """Test that OktaAPIError is retried."""
-        exception = OktaAPIError("API error")
-        assert should_retry_exception(exception) is True
-    
-    def test_should_retry_connection_error(self):
-        """Test that ConnectionError is retried."""
-        exception = ConnectionError("Network error")
-        assert should_retry_exception(exception) is True
-    
-    def test_should_retry_timeout_error(self):
-        """Test that TimeoutError is retried."""
-        exception = TimeoutError("Request timeout")
-        assert should_retry_exception(exception) is True
-    
-    def test_should_not_retry_generic_exception(self):
-        """Test that generic exceptions are not retried."""
-        exception = ValueError("Some error")
-        assert should_retry_exception(exception) is False
 
 
 class TestFetchOktaDataWithRetry:

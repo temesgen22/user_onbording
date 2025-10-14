@@ -6,6 +6,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
+    retry_if_not_exception_type,
     before_sleep_log,
     after_log
 )
@@ -29,23 +30,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/hr", tags=["hr"])
 
 
-def should_retry_exception(exception):
-
-    # Don't retry on non-retryable Okta errors
-    if isinstance(exception, (OktaUserNotFoundError, OktaConfigurationError)):
-        return False
-    
-    # Retry on generic OktaAPIError and connection issues
-    if isinstance(exception, (OktaAPIError, ConnectionError, TimeoutError)):
-        return True
-    
-    return False
-
-
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=should_retry_exception,
+    # Retry on OktaAPIError, ConnectionError, TimeoutError
+    # BUT exclude OktaUserNotFoundError and OktaConfigurationError (which are subclasses of OktaAPIError)
+    retry=(
+        retry_if_exception_type((OktaAPIError, ConnectionError, TimeoutError)) &
+        retry_if_not_exception_type((OktaUserNotFoundError, OktaConfigurationError))
+    ),
     before_sleep=before_sleep_log(logger, logging.WARNING),
     after=after_log(logger, logging.INFO)
 )

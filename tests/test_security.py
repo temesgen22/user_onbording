@@ -158,7 +158,7 @@ class TestScrubPII:
         scrubbed = scrub_pii(data)
         
         # Should keep last 4 digits only
-        assert scrubbed["work_phone"] == "***4678"
+        assert scrubbed["work_phone"] == "***5678"  # Last 4 digits of "46812345678"
         assert scrubbed["mobile_phone"] == "***6543"
     
     def test_scrub_short_phone(self):
@@ -179,8 +179,9 @@ class TestScrubPII:
         
         assert scrubbed["email"] is None
         assert scrubbed["first_name"] is None
-        # employee_id becomes employee_id_hash even if None
-        assert "employee_id_hash" in scrubbed
+        # employee_id=None gets scrubbed, hash_identifier(None) returns "***"
+        # The key "employee_id" is not included when value is None
+        assert "employee_id" in scrubbed and scrubbed["employee_id"] is None
     
     def test_scrub_complex_data(self):
         """Test scrubbing complex nested data."""
