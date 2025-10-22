@@ -156,7 +156,8 @@ async def process_enrichment_message(message_value: dict, store) -> tuple[bool, 
         
     except Exception as e:
         # Check if this is a RetryError from tenacity
-        if "RetryError" in str(type(e)):
+        from tenacity import RetryError
+        if isinstance(e, RetryError):
             # Extract the original exception from RetryError
             original_error = getattr(e, 'last_attempt', None)
             if original_error and hasattr(original_error, 'exception'):
