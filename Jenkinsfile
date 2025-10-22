@@ -72,14 +72,14 @@ pipeline {
                     . ${VENV_DIR}/bin/activate
                     pip install --upgrade pip
                     
-                    # Install dependencies
-                    pip install -r requirements.txt
+                    # Install all dependencies (including linting tools)
+                    # Use --no-cache-dir to avoid disk space issues
+                    pip install --no-cache-dir -r requirements.txt
                     
-                    # Install additional testing dependencies
-                    pip install pytest-html pytest-xdist || true
-                    
-                    # Show installed packages
-                    pip list
+                    # Show installed packages (only in debug mode)
+                    if [ "${LOG_LEVEL:-INFO}" = "DEBUG" ]; then
+                        pip list
+                    fi
                 '''
             }
         }
@@ -90,24 +90,26 @@ pipeline {
                 sh '''
                     . ${VENV_DIR}/bin/activate
                     
-                    # Install linting tools (if not in requirements.txt)
-                    pip install flake8 pylint black isort mypy || true
+                    # Run linting tools with timeouts to prevent hanging
+                    echo "Running code quality checks..."
                     
-                    # Format check with black
+                    # Format check with black (fast)
                     echo "Checking code formatting with black..."
-                    black --check app/ tests/ || echo "Warning: Code formatting issues found"
+                    timeout 60 black --check app/ tests/ || echo "Warning: Code formatting issues found"
                     
-                    # Import sorting check
+                    # Import sorting check (fast)
                     echo "Checking import sorting with isort..."
-                    isort --check-only app/ tests/ || echo "Warning: Import sorting issues found"
+                    timeout 60 isort --check-only app/ tests/ || echo "Warning: Import sorting issues found"
                     
-                    # Flake8 linting
+                    # Flake8 linting (fast)
                     echo "Running flake8..."
-                    flake8 app/ tests/ --max-line-length=100 --exclude=venv,.venv || echo "Warning: Flake8 issues found"
+                    timeout 60 flake8 app/ tests/ --max-line-length=100 --exclude=venv,.venv || echo "Warning: Flake8 issues found"
                     
-                    # Type checking (optional)
+                    # Type checking (slower, but with timeout)
                     echo "Running type checking..."
-                    mypy app/ --ignore-missing-imports || echo "Warning: Type checking issues found"
+                    timeout 120 mypy app/ --ignore-missing-imports || echo "Warning: Type checking issues found"
+                    
+                    echo "Code quality checks completed"
                 '''
             }
         }
