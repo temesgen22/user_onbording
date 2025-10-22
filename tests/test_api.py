@@ -3,7 +3,7 @@ Tests for API endpoints.
 """
 
 import pytest
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, AsyncMock
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -26,58 +26,55 @@ class TestHRWebhookEndpoint:
     """Test HR webhook endpoint."""
     
     def test_hr_webhook_success(self, client, sample_hr_user, sample_okta_user):
-        """Test successful HR webhook acceptance with background processing."""
-        # Mock the Okta loader to return our sample data
-        mock_okta_user = OktaUser(**sample_okta_user)
+        """Test successful HR webhook acceptance with Kafka publishing."""
+        # Mock the Kafka producer to return success
+        mock_producer = AsyncMock()
+        mock_producer.publish_enrichment_request.return_value = True
         
-        with patch('app.api.hr.load_okta_user_by_email', return_value=mock_okta_user):
+        with patch('app.dependencies.get_kafka_producer', return_value=mock_producer):
             response = client.post("/v1/hr/webhook", json=sample_hr_user)
             
             assert response.status_code == 202
             data = response.json()
             
-            # Verify the webhook was accepted (not the enriched data)
+            # Verify the webhook was accepted and published to Kafka
             assert data["status"] == "accepted"
             assert data["employee_id"] == "12345"
             assert data["email"] == "test.user@example.com"
             assert "queued" in data["message"].lower()
+            assert "correlation_id" in data
+            
+            # Verify Kafka producer was called
+            mock_producer.publish_enrichment_request.assert_called_once()
+            call_args = mock_producer.publish_enrichment_request.call_args
+            assert call_args[1]["hr_user"].employee_id == "12345"
+            assert call_args[1]["correlation_id"] is not None
     
-    def test_hr_webhook_background_enrichment(self, client, sample_hr_user, sample_okta_user):
-        """Test that background enrichment actually completes and stores data."""
-        # Mock the Okta loader to return our sample data
-        mock_okta_user = OktaUser(**sample_okta_user)
+    def test_hr_webhook_kafka_publish_failure(self, client, sample_hr_user):
+        """Test HR webhook when Kafka publishing fails."""
+        # Mock the Kafka producer to return failure
+        mock_producer = AsyncMock()
+        mock_producer.publish_enrichment_request.return_value = False
         
-        with patch('app.api.hr.load_okta_user_by_email', return_value=mock_okta_user):
-            # Send webhook
+        with patch('app.dependencies.get_kafka_producer', return_value=mock_producer):
             response = client.post("/v1/hr/webhook", json=sample_hr_user)
-            assert response.status_code == 202
             
-            # With TestClient, background tasks complete before response is returned
-            # So we can immediately retrieve the enriched user
-            get_response = client.get("/v1/users/12345")
-            assert get_response.status_code == 200
-            
-            enriched_data = get_response.json()
-            assert enriched_data["id"] == "12345"
-            assert enriched_data["name"] == "Jane Doe"
-            assert enriched_data["email"] == "test.user@example.com"
-            assert enriched_data["title"] == "Software Engineer"
-            assert enriched_data["department"] == "Engineering"
-            assert enriched_data["startDate"] == "2024-01-15"
-            assert enriched_data["onboarded"] is True
-            assert "Engineering" in enriched_data["groups"]
-            assert "Google Workspace" in enriched_data["applications"]
+            # Should return 503 Service Unavailable when Kafka publish fails
+            assert response.status_code == 503
+            data = response.json()
+            assert "Unable to queue enrichment request" in data["detail"]
     
     def test_hr_webhook_okta_user_not_found(self, client, sample_hr_user):
-        """Test HR webhook when Okta user is not found in background processing."""
-        from app.exceptions import OktaUserNotFoundError
+        """Test HR webhook when Okta user is not found - now handled by Kafka workers."""
+        # Mock the Kafka producer to return success (webhook accepts)
+        mock_producer = AsyncMock()
+        mock_producer.publish_enrichment_request.return_value = True
         
         # Use a unique employee_id to avoid conflicts with other tests
         sample_hr_user["employee_id"] = "99999"
         
-        # Mock to raise an exception
-        with patch('app.api.hr.load_okta_user_by_email', side_effect=OktaUserNotFoundError("test@example.com")):
-            # Webhook should still accept (202) but background task will fail
+        with patch('app.dependencies.get_kafka_producer', return_value=mock_producer):
+            # Webhook should accept (202) and publish to Kafka
             response = client.post("/v1/hr/webhook", json=sample_hr_user)
             
             assert response.status_code == 202
@@ -85,7 +82,10 @@ class TestHRWebhookEndpoint:
             assert data["status"] == "accepted"
             assert data["employee_id"] == "99999"
             
-            # User should NOT be in the store after background task fails
+            # Verify Kafka producer was called
+            mock_producer.publish_enrichment_request.assert_called_once()
+            
+            # User should NOT be in the store initially (worker hasn't processed yet)
             get_response = client.get("/v1/users/99999")
             assert get_response.status_code == 404
     
@@ -127,7 +127,7 @@ class TestUsersEndpoint:
         enriched_user = EnrichedUser.from_sources(hr=hr_user, okta=okta_user)
         
         # Mock the store to return our user
-        with patch('app.api.users.get_user_store', return_value=user_store):
+        with patch('app.dependencies.get_user_store', return_value=user_store):
             user_store.put(enriched_user.id, enriched_user)
             
             response = client.get(f"/v1/users/{enriched_user.id}")
@@ -141,7 +141,7 @@ class TestUsersEndpoint:
     
     def test_get_user_not_found(self, client, user_store):
         """Test user retrieval when user is not found."""
-        with patch('app.api.users.get_user_store', return_value=user_store):
+        with patch('app.dependencies.get_user_store', return_value=user_store):
             response = client.get("/v1/users/nonexistent")
             
             assert response.status_code == 404
@@ -153,11 +153,12 @@ class TestIntegration:
     """Integration tests for the complete flow."""
     
     def test_complete_webhook_and_retrieve_flow(self, client, sample_hr_user, sample_okta_user):
-        """Test the complete flow: webhook acceptance -> background enrichment -> retrieve."""
-        # Mock Okta data
-        mock_okta_user = OktaUser(**sample_okta_user)
+        """Test the complete flow: webhook acceptance -> Kafka publishing -> retrieve."""
+        # Mock Kafka producer
+        mock_producer = AsyncMock()
+        mock_producer.publish_enrichment_request.return_value = True
         
-        with patch('app.api.hr.load_okta_user_by_email', return_value=mock_okta_user):
+        with patch('app.dependencies.get_kafka_producer', return_value=mock_producer):
             # Step 1: Send webhook (returns immediately)
             webhook_response = client.post("/v1/hr/webhook", json=sample_hr_user)
             assert webhook_response.status_code == 202
@@ -165,39 +166,34 @@ class TestIntegration:
             webhook_data = webhook_response.json()
             assert webhook_data["status"] == "accepted"
             assert webhook_data["employee_id"] == "12345"
+            assert "correlation_id" in webhook_data
             
-            # Step 2: Retrieve the user (background task has completed in TestClient)
+            # Verify Kafka producer was called
+            mock_producer.publish_enrichment_request.assert_called_once()
+            
+            # Step 2: User should not be available yet (worker hasn't processed)
             get_response = client.get("/v1/users/12345")
-            assert get_response.status_code == 200
-            
-            get_data = get_response.json()
-            
-            # Verify the enriched data
-            assert get_data["id"] == "12345"
-            assert get_data["name"] == "Jane Doe"
-            assert get_data["email"] == "test.user@example.com"
-            assert len(get_data["groups"]) > 0
-            assert len(get_data["applications"]) > 0
+            assert get_response.status_code == 404
     
     def test_webhook_with_different_emails(self, client, sample_hr_user, sample_okta_user):
         """Test webhook with different email addresses."""
+        # Mock Kafka producer
+        mock_producer = AsyncMock()
+        mock_producer.publish_enrichment_request.return_value = True
+        
         # Modify the sample data to have different emails
         sample_hr_user["email"] = "hr.user@example.com"
-        sample_okta_user["profile"]["email"] = "okta.user@example.com"
         
-        mock_okta_user = OktaUser(**sample_okta_user)
-        
-        with patch('app.api.hr.load_okta_user_by_email', return_value=mock_okta_user):
+        with patch('app.dependencies.get_kafka_producer', return_value=mock_producer):
             # Webhook accepts immediately
             response = client.post("/v1/hr/webhook", json=sample_hr_user)
             assert response.status_code == 202
             
             webhook_data = response.json()
             assert webhook_data["email"] == "hr.user@example.com"
+            assert "correlation_id" in webhook_data
             
-            # Retrieve enriched user after background processing
-            get_response = client.get("/v1/users/12345")
-            assert get_response.status_code == 200
-            
-            enriched_data = get_response.json()
-            assert enriched_data["email"] == "hr.user@example.com"  # HR email takes precedence
+            # Verify Kafka producer was called with correct data
+            mock_producer.publish_enrichment_request.assert_called_once()
+            call_args = mock_producer.publish_enrichment_request.call_args
+            assert call_args[1]["hr_user"].email == "hr.user@example.com"

@@ -14,6 +14,10 @@ os.environ.setdefault("OKTA_ORG_URL", "https://test-org.okta.com")
 os.environ.setdefault("OKTA_API_TOKEN", "test-token-12345")
 os.environ.setdefault("LOG_LEVEL", "DEBUG")
 os.environ.setdefault("LOG_FORMAT", "text")
+os.environ.setdefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+os.environ.setdefault("KAFKA_ENRICHMENT_TOPIC", "test.enrichment.requested")
+os.environ.setdefault("KAFKA_DLQ_TOPIC", "test.enrichment.failed")
+os.environ.setdefault("KAFKA_CONSUMER_GROUP", "test-enrichment-workers")
 
 from app.main import create_app
 from app.store import InMemoryUserStore, RedisUserStore
@@ -64,7 +68,10 @@ def app(test_settings):
         with patch("app.main.get_settings", return_value=test_settings):
             with patch("app.config.get_settings", return_value=test_settings):
                 with patch("app.middleware.get_settings", return_value=test_settings):
-                    return create_app()
+                    with patch("app.dependencies.get_kafka_producer") as mock_kafka:
+                        # Mock Kafka producer dependency
+                        mock_kafka.return_value = MagicMock()
+                        return create_app()
 
 
 @pytest.fixture
@@ -166,6 +173,38 @@ def mock_okta_credentials():
         "OKTA_ORG_URL": "https://test-org.okta.com",
         "OKTA_API_TOKEN": "test-token-12345"
     }
+
+
+@pytest.fixture
+def mock_kafka_producer():
+    """Mock Kafka producer for testing."""
+    producer = MagicMock()
+    producer.produce = MagicMock()
+    producer.poll = MagicMock()
+    producer.flush = MagicMock()
+    producer.close = MagicMock()
+    return producer
+
+
+@pytest.fixture
+def mock_kafka_consumer():
+    """Mock Kafka consumer for testing."""
+    consumer = MagicMock()
+    consumer.poll = MagicMock()
+    consumer.commit = MagicMock()
+    consumer.close = MagicMock()
+    consumer.subscribe = MagicMock()
+    return consumer
+
+
+@pytest.fixture
+def kafka_producer_service(mock_kafka_producer):
+    """Create UserEnrichmentProducer with mocked Kafka producer."""
+    from app.services.kafka_service import UserEnrichmentProducer
+    return UserEnrichmentProducer(
+        producer=mock_kafka_producer,
+        topic="test.enrichment.requested"
+    )
 
 
 @pytest.fixture

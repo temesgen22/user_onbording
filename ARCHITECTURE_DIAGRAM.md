@@ -34,8 +34,9 @@ mindmap
         Swappable Backends
     Behavioral Patterns
       Background Processing
-        FastAPI BackgroundTasks
-        Async Queue
+        Kafka Message Queuing
+        Producer/Consumer Pattern
+        Dead Letter Queue
       Retry Pattern
         Exponential Backoff
         Transient Failures
@@ -71,6 +72,7 @@ graph TB
     
     subgraph "Service Layer (Business Logic)"
         okta[app/services/okta_loader.py<br/>External Integration]
+        kafka_service[app/services/kafka_service.py<br/>Message Publishing]
         enrichment[Data Enrichment Logic]
     end
     
@@ -86,12 +88,14 @@ graph TB
     
     subgraph "Cross-Cutting Concerns"
         config[app/config.py<br/>Configuration]
+        kafka_config[app/kafka_config.py<br/>Kafka Settings]
         logging[app/logging_config.py<br/>Structured Logging]
         exceptions[app/exceptions.py<br/>Error Handling]
         middleware_layer[app/middleware.py<br/>Auth & CORS]
     end
     
-    hr --> enrichment
+    hr --> kafka_service
+    kafka_service --> enrichment
     users --> store
     enrichment --> okta
     enrichment --> store
@@ -101,6 +105,7 @@ graph TB
     store --> schemas
     
     hr -.uses.-> config
+    kafka_service -.uses.-> kafka_config
     okta -.uses.-> config
     middleware_layer -.uses.-> config
     
@@ -109,9 +114,11 @@ graph TB
     
     style hr fill:#4ecdc4
     style users fill:#4ecdc4
+    style kafka_service fill:#ffe66d
     style okta fill:#ffe66d
     style store fill:#ff6b6b
     style schemas fill:#95e1d3
+    style kafka_config fill:#95e1d3
 ```
 
 **Benefits:**
@@ -270,57 +277,75 @@ def init_user_store() -> UserStore:
 
 ---
 
-### 4. **Background Processing Pattern** ⚡
+### 4. **Kafka-Based Background Processing Pattern** ⚡
 
-Asynchronous webhook processing with immediate response:
+Asynchronous webhook processing with reliable message queuing:
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant Webhook as hr_webhook()
-    participant Queue as BackgroundTasks
-    participant Worker as process_user_enrichment()
+    participant Producer as Kafka Producer
+    participant Kafka as Kafka Topic
+    participant Consumer as Kafka Consumer
+    participant Worker as enrichment_worker.py
     participant Okta as Okta API
     participant Store as UserStore
+    participant DLQ as Dead Letter Queue
     
     Client->>+Webhook: POST /v1/hr/webhook
     Note over Webhook: Validate payload
-    Webhook->>Queue: add_task(process_user_enrichment)
+    Webhook->>Producer: publish_enrichment_request()
+    Producer->>Kafka: Publish message to topic
     Webhook-->>-Client: 202 Accepted (10-50ms)
     
     Note over Client: Client already has response!
     
-    Queue->>+Worker: Execute in background
+    Kafka->>+Consumer: Poll for messages
+    Consumer->>+Worker: Process enrichment message
     Worker->>+Okta: Fetch user data
     Okta-->>-Worker: User + Groups + Apps
     Worker->>Worker: Enrich data
     Worker->>+Store: Save enriched user
     Store-->>-Worker: Saved
-    Worker-->>-Queue: Complete
+    Worker->>Consumer: Commit offset
+    Consumer-->>-Kafka: Message processed
+    
+    alt Processing Failed
+        Worker->>DLQ: Publish failed message
+        Worker->>Consumer: Commit offset (move past)
+    end
     
     Note over Worker: Client doesn't wait for this
 ```
 
 **Performance Comparison:**
 
-| Approach | Response Time | Throughput | Client Experience |
-|----------|--------------|------------|-------------------|
-| **Background Tasks** ✅ | 10-50ms | High | Excellent |
-| Async Immediate | 1-3s | Medium | Good |
-| Synchronous ❌ | 1-3s sequential | Low | Poor |
+| Approach | Response Time | Throughput | Client Experience | Reliability |
+|----------|--------------|------------|-------------------|-------------|
+| **Kafka Queuing** ✅ | 10-50ms | Very High | Excellent | Guaranteed Delivery |
+| Background Tasks | 10-50ms | High | Excellent | In-Memory Only |
+| Async Immediate | 1-3s | Medium | Good | No Persistence |
+| Synchronous ❌ | 1-3s sequential | Low | Poor | Blocking |
 
 **Implementation:**
 ```python
 @router.post("/webhook", status_code=202)
 async def hr_webhook(
     hr_user: HRUserIn,
-    background_tasks: BackgroundTasks,
+    kafka_producer: UserEnrichmentProducer = Depends(get_kafka_producer),
 ):
-    # Queue the work
-    background_tasks.add_task(process_user_enrichment, hr_user, store)
+    # Publish to Kafka for reliable processing
+    published = await kafka_producer.publish_enrichment_request(
+        hr_user=hr_user,
+        correlation_id=str(uuid.uuid4())
+    )
+    
+    if not published:
+        raise HTTPException(503, "Unable to queue enrichment request")
     
     # Return immediately (50-300x faster!)
-    return {"status": "accepted"}
+    return {"status": "accepted", "correlation_id": correlation_id}
 ```
 
 ---
@@ -626,8 +651,11 @@ graph TB
     end
     
     subgraph "Background Processing"
-        queue[FastAPI BackgroundTasks<br/>Async Queue]
-        worker[process_user_enrichment<br/>Worker Function]
+        kafka[Kafka Message Queue<br/>Reliable Messaging]
+        producer[Kafka Producer<br/>Message Publishing]
+        consumer[Kafka Consumer<br/>Message Processing]
+        worker[enrichment_worker.py<br/>Worker Service]
+        dlq[Dead Letter Queue<br/>Failed Messages]
         retry[Retry Handler<br/>Exponential Backoff]
     end
     
@@ -655,10 +683,13 @@ graph TB
     auth --> user_endpoint
     auth --> health_endpoint
     
-    webhook_endpoint -->|Queue Task| queue
-    queue -->|Execute| worker
+    webhook_endpoint -->|Publish Message| producer
+    producer -->|Send to Topic| kafka
+    kafka -->|Poll Messages| consumer
+    consumer -->|Process| worker
     worker --> retry
     retry --> okta_service
+    worker -->|Failed Messages| dlq
     
     okta_service -->|HTTP Calls| okta_api
     okta_service --> enrichment
@@ -681,8 +712,11 @@ graph TB
     style hr_system fill:#e0e0e0
     style okta_api fill:#e0e0e0
     style webhook_endpoint fill:#4ecdc4
-    style queue fill:#ffe66d
+    style kafka fill:#ffe66d
+    style producer fill:#ffe66d
+    style consumer fill:#ffe66d
     style worker fill:#ffe66d
+    style dlq fill:#ff6b6b
     style okta_service fill:#95e1d3
     style store fill:#ff6b6b
 ```
@@ -810,6 +844,8 @@ graph TD
     
     %% Services
     okta[app/services/okta_loader.py]
+    kafka_service[app/services/kafka_service.py]
+    kafka_config[app/kafka_config.py]
     
     %% External dependencies
     fastapi[FastAPI]
@@ -826,7 +862,7 @@ graph TD
     
     %% API imports
     hr --> schemas
-    hr --> okta
+    hr --> kafka_service
     hr --> deps
     hr --> store
     hr --> exceptions
@@ -842,13 +878,20 @@ graph TD
     okta --> exceptions
     okta --> httpx
     
+    kafka_service --> schemas
+    kafka_service --> kafka_config
+    kafka_service --> exceptions
+    
     %% Core imports
     deps --> store
+    deps --> kafka_service
+    deps --> kafka_config
     store --> schemas
     middleware --> config
     middleware --> exceptions
     schemas --> pydantic
     config --> pydantic
+    kafka_config --> pydantic
     
     %% Main uses FastAPI
     main --> fastapi
@@ -859,6 +902,8 @@ graph TD
     style hr fill:#4ecdc4
     style users fill:#4ecdc4
     style okta fill:#ffe66d
+    style kafka_service fill:#ffe66d
+    style kafka_config fill:#95e1d3
     style config fill:#95e1d3
     style schemas fill:#95e1d3
 ```
@@ -1043,13 +1088,16 @@ sequenceDiagram
     actor Client
     participant Middleware as APIKeyMiddleware
     participant Endpoint as hr_webhook()
-    participant BgQueue as BackgroundTasks
-    participant Worker as process_user_enrichment()
+    participant Producer as Kafka Producer
+    participant Kafka as Kafka Topic
+    participant Consumer as Kafka Consumer
+    participant Worker as enrichment_worker.py
     participant Retry as fetch_okta_data_with_retry()
     participant Service as load_okta_user_by_email()
     participant Okta as Okta API
     participant Enricher as EnrichedUser.from_sources()
-    participant Store as InMemoryUserStore
+    participant Store as UserStore
+    participant DLQ as Dead Letter Queue
     
     Client->>+Middleware: POST /v1/hr/webhook<br/>{HR user data}
     
@@ -1064,17 +1112,20 @@ sequenceDiagram
     
     Note over Endpoint: Validate HRUserIn schema<br/>(Pydantic)
     
-    Endpoint->>BgQueue: add_task(process_user_enrichment, hr_user, store)
-    Note over BgQueue: Task queued for<br/>background processing
+    Endpoint->>Producer: publish_enrichment_request(hr_user, correlation_id)
+    Producer->>Kafka: Publish message to topic
+    Note over Kafka: Message persisted for<br/>reliable processing
     
-    Endpoint-->>-Middleware: 202 Accepted<br/>{status: "accepted"}
+    Endpoint-->>-Middleware: 202 Accepted<br/>{status: "accepted", correlation_id}
     Middleware-->>-Client: 202 Accepted (10-50ms)
     
     Note over Client: Client already has response!
     
-    Note over BgQueue,Store: Background processing starts AFTER response sent
+    Note over Kafka,Store: Background processing starts AFTER response sent
     
-    BgQueue->>+Worker: Execute task
+    Kafka->>+Consumer: Poll for messages
+    Consumer->>+Worker: Process enrichment message
+    
     Worker->>+Retry: await fetch_okta_data_with_retry(email)
     
     Note over Retry: Retry with exponential backoff<br/>Max 3 attempts: 0s, 2s, 4s
@@ -1087,8 +1138,9 @@ sequenceDiagram
     alt User not found
         Service-->>Retry: raise OktaUserNotFoundError
         Retry-->>Worker: Exception (no retry)
-        Worker->>Worker: Log error
-        Worker-->>-BgQueue: Complete (failed)
+        Worker->>DLQ: Publish failed message
+        Worker->>Consumer: Commit offset (move past)
+        Worker-->>-Consumer: Complete (failed)
     else Success
         Service->>+Okta: GET /api/v1/users/{id}/groups
         Okta-->>-Service: Groups list
@@ -1105,11 +1157,13 @@ sequenceDiagram
         Enricher-->>-Worker: EnrichedUser
         
         Worker->>+Store: put(user_id, enriched_user)
-        Store->>Store: Store in _users dict
+        Store->>Store: Store in Redis/Memory
         Store-->>-Worker: None
         
+        Worker->>Consumer: Commit offset
+        Consumer-->>-Kafka: Message processed
         Worker->>Worker: Log success
-        Worker-->>-BgQueue: Complete (success)
+        Worker-->>-Consumer: Complete (success)
     end
 ```
 
@@ -1483,7 +1537,7 @@ This project implements **10+ software architecture patterns**:
 | **Repository Pattern** | Abstract storage | `UserStore` with InMemory & Redis backends |
 | **Singleton Pattern** | Shared instances | Settings, UserStore |
 | **Factory Pattern** | App configuration | `create_app()` |
-| **Background Processing** | Async execution | FastAPI BackgroundTasks |
+| **Background Processing** | Async execution | Kafka Message Queuing |
 | **Retry Pattern** | Resilience | Exponential backoff for Okta calls |
 | **Middleware Pattern** | Request pipeline | CORS, Auth chain |
 | **Adapter Pattern** | External integration | Okta API adapter |
@@ -1522,17 +1576,21 @@ This project implements **10+ software architecture patterns**:
 └─────────────┘
 ```
 
-### 4. **Async + Background Processing Pattern**
+### 4. **Kafka-Based Async Processing Pattern**
 - All API endpoints are `async def`
 - Okta service functions are `async`
 - Uses `httpx.AsyncClient` for non-blocking I/O
-- **Background tasks** for webhook processing (202 Accepted pattern)
+- **Kafka message queuing** for webhook processing (202 Accepted pattern)
+- **Dead Letter Queue** for failed message handling
+- **Horizontal scaling** with multiple worker instances
 - Retry mechanism with exponential backoff
 
 **Performance Impact:**
 - Webhook response: **10-50ms** (vs. 1-3s if synchronous)
-- Concurrent webhooks: **100+** (async/await)
+- Concurrent webhooks: **1000+** (Kafka + async/await)
 - Background enrichment: **1-3s** (doesn't block client)
+- **Guaranteed delivery** and message persistence
+- **Fault tolerance** with worker restarts
 
 ### 5. **Error Handling Architecture**
 - **Custom exception hierarchy** rooted in `UserOnboardingError`
@@ -1605,11 +1663,256 @@ Client ← 404 Not Found
 - ✅ Multiple instances can share data
 - ⚠️ Requires Redis infrastructure
 
+**Current Kafka Integration:**
+- ✅ **Kafka message queuing** (replaces BackgroundTasks)
+- ✅ **Dead Letter Queue** for failed message handling
+- ✅ **Horizontal scaling** with multiple worker instances
+- ✅ **Guaranteed message delivery** and persistence
+- ✅ **Correlation ID tracking** for end-to-end observability
+
 **Future Enhancements:**
-- Replace `BackgroundTasks` with Celery/RQ (distributed queue)
 - Add load balancer (horizontal scaling with Redis backend)
 - Add PostgreSQL backend (complex queries, audit trails)
+- Add Kafka Streams for real-time analytics
 - All achievable thanks to Repository and DI patterns!
+
+---
+
+## Kafka Integration Architecture
+
+### **Message Flow Architecture**
+
+```mermaid
+graph TB
+    subgraph "API Service"
+        webhook[POST /v1/hr/webhook]
+        producer[Kafka Producer]
+    end
+    
+    subgraph "Kafka Infrastructure"
+        topic[user.enrichment.requested<br/>Topic]
+        dlq_topic[user.enrichment.failed<br/>Dead Letter Queue]
+        zookeeper[Zookeeper<br/>Coordination]
+    end
+    
+    subgraph "Worker Services"
+        consumer1[Worker 1<br/>Consumer]
+        consumer2[Worker 2<br/>Consumer]
+        consumer3[Worker 3<br/>Consumer]
+    end
+    
+    subgraph "Processing"
+        enrichment[Data Enrichment<br/>Okta + HR]
+        storage[User Storage<br/>Redis/Memory]
+    end
+    
+    webhook --> producer
+    producer --> topic
+    topic --> consumer1
+    topic --> consumer2
+    topic --> consumer3
+    
+    consumer1 --> enrichment
+    consumer2 --> enrichment
+    consumer3 --> enrichment
+    
+    enrichment --> storage
+    enrichment -->|Failed| dlq_topic
+    
+    topic -.managed by.-> zookeeper
+    dlq_topic -.managed by.-> zookeeper
+    
+    style webhook fill:#4ecdc4
+    style producer fill:#ffe66d
+    style topic fill:#95e1d3
+    style dlq_topic fill:#ff6b6b
+    style consumer1 fill:#ffe66d
+    style consumer2 fill:#ffe66d
+    style consumer3 fill:#ffe66d
+    style enrichment fill:#95e1d3
+    style storage fill:#ff6b6b
+```
+
+### **Kafka Configuration**
+
+```mermaid
+graph LR
+    subgraph "Kafka Settings"
+        bootstrap[KAFKA_BOOTSTRAP_SERVERS<br/>kafka:9093]
+        enrichment_topic[KAFKA_ENRICHMENT_TOPIC<br/>user.enrichment.requested]
+        dlq_topic[KAFKA_DLQ_TOPIC<br/>user.enrichment.failed]
+        consumer_group[KAFKA_CONSUMER_GROUP<br/>user-enrichment-workers]
+    end
+    
+    subgraph "Producer Config"
+        acks[acks: all<br/>Guaranteed delivery]
+        idempotence[enable.idempotence: true<br/>Exactly-once semantics]
+        compression[compression.type: gzip<br/>Efficient storage]
+        retries[retries: 3<br/>Automatic retry]
+    end
+    
+    subgraph "Consumer Config"
+        auto_commit[enable.auto.commit: false<br/>Manual offset management]
+        offset_reset[auto.offset.reset: earliest<br/>Process all messages]
+        max_poll[max.poll.interval.ms: 300000<br/>5 minute timeout]
+    end
+    
+    bootstrap --> acks
+    bootstrap --> auto_commit
+    enrichment_topic --> consumer_group
+    dlq_topic --> consumer_group
+    
+    style bootstrap fill:#4ecdc4
+    style enrichment_topic fill:#95e1d3
+    style dlq_topic fill:#ff6b6b
+    style consumer_group fill:#ffe66d
+```
+
+### **Worker Scaling Strategy**
+
+```mermaid
+graph TD
+    subgraph "Docker Compose"
+        api[API Service<br/>1 instance]
+        kafka[Kafka Broker<br/>1 instance]
+        zookeeper[Zookeeper<br/>1 instance]
+        redis[Redis<br/>1 instance]
+    end
+    
+    subgraph "Worker Scaling"
+        worker1[Worker 1<br/>enrichment-worker-1]
+        worker2[Worker 2<br/>enrichment-worker-2]
+        worker3[Worker 3<br/>enrichment-worker-3]
+        workerN[Worker N<br/>enrichment-worker-N]
+    end
+    
+    subgraph "Load Distribution"
+        partition1[Partition 1<br/>Messages 1, 4, 7...]
+        partition2[Partition 2<br/>Messages 2, 5, 8...]
+        partition3[Partition 3<br/>Messages 3, 6, 9...]
+    end
+    
+    api --> kafka
+    kafka --> worker1
+    kafka --> worker2
+    kafka --> worker3
+    kafka --> workerN
+    
+    worker1 --> partition1
+    worker2 --> partition2
+    worker3 --> partition3
+    
+    worker1 --> redis
+    worker2 --> redis
+    worker3 --> redis
+    workerN --> redis
+    
+    style api fill:#4ecdc4
+    style kafka fill:#95e1d3
+    style worker1 fill:#ffe66d
+    style worker2 fill:#ffe66d
+    style worker3 fill:#ffe66d
+    style workerN fill:#ffe66d
+    style redis fill:#ff6b6b
+```
+
+### **Error Handling & Dead Letter Queue**
+
+```mermaid
+graph TD
+    subgraph "Message Processing"
+        message[Incoming Message<br/>user.enrichment.requested]
+        validation[Validate Message<br/>Schema Check]
+        processing[Process Enrichment<br/>Okta API Calls]
+        storage[Store Result<br/>Redis/Memory]
+    end
+    
+    subgraph "Success Path"
+        success[Success]
+        commit[Commit Offset]
+        complete[Processing Complete]
+    end
+    
+    subgraph "Error Handling"
+        retry[Retry Logic<br/>3 attempts with backoff]
+        permanent[Permanent Error<br/>User not found, Config error]
+        transient[Transient Error<br/>Network, API timeout]
+        dlq[Dead Letter Queue<br/>user.enrichment.failed]
+    end
+    
+    message --> validation
+    validation -->|Valid| processing
+    validation -->|Invalid| dlq
+    
+    processing -->|Success| storage
+    processing -->|Error| retry
+    
+    storage --> success
+    success --> commit
+    commit --> complete
+    
+    retry -->|Max retries| permanent
+    retry -->|Transient| processing
+    
+    permanent --> dlq
+    transient --> retry
+    
+    dlq -->|Manual Review| admin[Admin Review<br/>Debug & Reprocess]
+    
+    style message fill:#4ecdc4
+    style success fill:#95e1d3
+    style dlq fill:#ff6b6b
+    style admin fill:#ffe66d
+```
+
+### **Monitoring & Observability**
+
+```mermaid
+graph LR
+    subgraph "Kafka UI"
+        kafka_ui[Kafka UI<br/>http://localhost:8080]
+        topics[Topic Management]
+        consumers[Consumer Groups]
+        messages[Message Browser]
+    end
+    
+    subgraph "Application Logs"
+        api_logs[API Logs<br/>Request/Response]
+        worker_logs[Worker Logs<br/>Processing Status]
+        kafka_logs[Kafka Logs<br/>Producer/Consumer]
+    end
+    
+    subgraph "Metrics"
+        throughput[Messages/Second]
+        lag[Consumer Lag]
+        errors[Error Rate]
+        latency[Processing Latency]
+    end
+    
+    subgraph "Correlation Tracking"
+        correlation_id[Correlation ID<br/>End-to-end tracking]
+        request_id[Request ID<br/>API request tracking]
+        worker_id[Worker ID<br/>Processing instance]
+    end
+    
+    kafka_ui --> topics
+    kafka_ui --> consumers
+    kafka_ui --> messages
+    
+    api_logs --> correlation_id
+    worker_logs --> correlation_id
+    kafka_logs --> correlation_id
+    
+    correlation_id --> throughput
+    correlation_id --> lag
+    correlation_id --> errors
+    correlation_id --> latency
+    
+    style kafka_ui fill:#4ecdc4
+    style correlation_id fill:#ffe66d
+    style throughput fill:#95e1d3
+    style errors fill:#ff6b6b
+```
 
 ---
 

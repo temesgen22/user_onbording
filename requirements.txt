@@ -24,4 +24,7 @@ pytest-cov==4.1.0
 # Redis for optional storage backend
 redis==6.4.0
 
+# Kafka for background task processing
+confluent-kafka==2.3.0
+
 

@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 import logging
+import uuid
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -13,8 +14,9 @@ from tenacity import (
 
 from ..schemas import HRUserIn, EnrichedUser, WebhookAcceptedResponse
 from ..services.okta_loader import load_okta_user_by_email
-from ..dependencies import get_user_store
+from ..dependencies import get_user_store, get_kafka_producer
 from ..store import UserStore
+from ..services.kafka_service import UserEnrichmentProducer
 from ..security import scrub_pii
 from ..exceptions import (
     OktaAPIError,
@@ -143,49 +145,72 @@ async def process_user_enrichment(hr_user: HRUserIn, store: UserStore) -> None:
 @router.post("/webhook", status_code=status.HTTP_202_ACCEPTED, response_model=WebhookAcceptedResponse)
 async def hr_webhook(
     hr_user: HRUserIn,
-    background_tasks: BackgroundTasks,
-    store: UserStore = Depends(get_user_store),
+    kafka_producer: UserEnrichmentProducer = Depends(get_kafka_producer),
 ):
     """
-    Accept HR user payload and queue for background enrichment.
+    Accept HR user payload and publish to Kafka for background enrichment.
     
     Security:
     - Optional API key in X-API-Key header (if configured)
     - All PII is scrubbed from logs for privacy protection
     
-    This endpoint accepts the webhook, validates the payload,
-    queues the enrichment process as a background task, and returns immediately
-    with 202 Accepted.
-    
-    The actual Okta API calls happen asynchronously after the response is sent,
-    improving response times and preventing client timeouts.
+    Changes from BackgroundTasks:
+    - Publishes message to Kafka instead of in-process background task
+    - Returns immediately after successful publish
+    - Worker services consume and process messages
+    - Guaranteed delivery and horizontal scaling
     
     Returns:
-        WebhookAcceptedResponse: Acknowledgment that the webhook was accepted
+        WebhookAcceptedResponse: Acknowledgment that webhook was accepted
     """
+    # Generate correlation ID for tracking
+    correlation_id = str(uuid.uuid4())
+    
     logger.info(
         "Received HR webhook for employee",
-        extra=scrub_pii({"employee_id": hr_user.employee_id, "email": hr_user.email})
+        extra=scrub_pii({
+            "employee_id": hr_user.employee_id,
+            "email": hr_user.email,
+            "correlation_id": correlation_id
+        })
     )
     
-    # Queue the enrichment process as a background task
-    background_tasks.add_task(
-        process_user_enrichment,
+    # Publish to Kafka
+    published = await kafka_producer.publish_enrichment_request(
         hr_user=hr_user,
-        store=store
+        correlation_id=correlation_id
     )
+    
+    if not published:
+        # Failed to publish - return 503 Service Unavailable
+        logger.error(
+            "Failed to queue enrichment request",
+            extra=scrub_pii({
+                "employee_id": hr_user.employee_id,
+                "correlation_id": correlation_id
+            })
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to queue enrichment request. Please retry."
+        )
     
     logger.info(
-        "Queued user enrichment for background processing",
-        extra=scrub_pii({"employee_id": hr_user.employee_id, "email": hr_user.email})
+        "Queued user enrichment in Kafka",
+        extra=scrub_pii({
+            "employee_id": hr_user.employee_id,
+            "email": hr_user.email,
+            "correlation_id": correlation_id
+        })
     )
     
-    # Return immediately with 202 Accepted (proper async semantics)
+    # Return immediately with 202 Accepted
     return WebhookAcceptedResponse(
         status="accepted",
-        message="User enrichment queued for background processing",
+        message=f"User enrichment queued (correlation_id: {correlation_id})",
         employee_id=hr_user.employee_id,
-        email=hr_user.email
+        email=hr_user.email,
+        correlation_id=correlation_id
     )
 
 

@@ -77,6 +77,7 @@ class WebhookAcceptedResponse(BaseModel):
     message: str
     employee_id: str
     email: EmailStr
+    correlation_id: Optional[str] = None
     
     model_config = ConfigDict(
         json_schema_extra={

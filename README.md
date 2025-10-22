@@ -1,20 +1,42 @@
 ## User Onboarding Integration API
 
-A minimal FastAPI service that accepts HR user data via webhook, enriches it with Okta data fetched from Okta's API, stores it (in-memory or Redis), and serves the enriched user via an API.
+A production-ready FastAPI service that accepts HR user data via webhook, enriches it with Okta data using Kafka for reliable background processing, stores it (in-memory or Redis), and serves the enriched user via an API.
 
 ### Endpoints
 
-- `POST /v1/hr/webhook` — Accept HR payload, queue for background enrichment, return immediately (202 Accepted)
+- `POST /v1/hr/webhook` — Accept HR payload, publish to Kafka for background enrichment, return immediately (202 Accepted)
 - `GET /v1/users/{id}` — Retrieve enriched user by employee id
 - `GET /v1/healthz` — Health check
 
 ### Run locally
 
+**Option 1: With Docker Compose (Recommended)**
 ```bash
+# Start all services (API + Kafka + Workers + Redis)
+docker-compose up -d
+
+# Check service status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+```
+
+**Option 2: Local Development**
+```bash
+# Start Kafka and Redis only
+docker-compose up -d zookeeper kafka redis
+
+# Install dependencies
 python -m venv .venv
 . .venv/Scripts/activate  # Windows PowerShell: .venv\\Scripts\\Activate.ps1
 pip install -r requirements.txt
+
+# Run API locally
 uvicorn app.main:app --reload --port 8000
+
+# Run worker locally (in another terminal)
+python workers/enrichment_worker.py
 ```
 
 ### Configure Application
@@ -39,6 +61,12 @@ REDIS_DB=0
 REDIS_PASSWORD=
 REDIS_KEY_PREFIX=user_onboarding:
 REDIS_CONNECTION_TIMEOUT=5
+
+# Kafka Configuration (for background processing)
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+KAFKA_ENRICHMENT_TOPIC=user.enrichment.requested
+KAFKA_DLQ_TOPIC=user.enrichment.failed
+KAFKA_CONSUMER_GROUP=user-enrichment-workers
 ```
 
 **Okta Configuration Notes:**
@@ -50,7 +78,7 @@ REDIS_CONNECTION_TIMEOUT=5
 - **`memory`** (default): Fast, simple, but data lost on restart. Good for development.
 - **`redis`**: Persistent storage, survives restarts. Recommended for production.
 
-See `ENV_CONFIG_EXAMPLES.md` and `REDIS_SETUP.md` for detailed configuration guides.
+See `KAFKA_SETUP.md` for detailed Kafka integration guide, `ENV_CONFIG_EXAMPLES.md` and `REDIS_SETUP.md` for detailed configuration guides.
 
 ### Simulate webhook
 
@@ -68,12 +96,38 @@ curl -X POST http://localhost:8000/v1/hr/webhook \
   --data @data/hr_user.json
 ```
 
-The webhook returns immediately with a `202 Accepted` response. Enrichment happens asynchronously in the background.
+The webhook returns immediately with a `202 Accepted` response. Enrichment happens asynchronously via Kafka workers.
 
 Then fetch the enriched user (wait a moment for background processing to complete):
 
 ```bash
 curl http://localhost:8000/v1/users/12345
+```
+
+### Monitor Kafka Integration
+
+**Kafka UI (Web Interface):**
+- URL: http://localhost:8080
+- View topics, messages, consumer groups
+- Monitor message flow and processing lag
+
+**Command Line Monitoring:**
+```bash
+# Check service status
+docker-compose ps
+
+# View all logs
+docker-compose logs -f
+
+# Check consumer groups
+docker-compose exec kafka kafka-consumer-groups \
+  --bootstrap-server localhost:9093 \
+  --group user-enrichment-workers --describe
+
+# View messages in enrichment topic
+docker-compose exec kafka kafka-console-consumer \
+  --bootstrap-server localhost:9093 \
+  --topic user.enrichment.requested --from-beginning
 ```
 
 ### Design notes
@@ -86,7 +140,8 @@ curl http://localhost:8000/v1/users/12345
  
 - **Privacy Protection**: 
   - PII scrubbing in logs (emails masked, IDs hashed) for GDPR compliance
-- **Background Processing**: Webhook accepts requests immediately and processes enrichment asynchronously using FastAPI BackgroundTasks
+- **Background Processing**: Webhook accepts requests immediately and processes enrichment asynchronously using Kafka for reliable message queuing
+- **Kafka Integration**: Production-ready message queuing with guaranteed delivery, horizontal scaling, and dead letter queue support
 - **Automatic Retry**: Transient Okta API failures are retried automatically with exponential backoff (3 attempts max)
 - **Clear API versioning** (`/v1`).
 - **Async/Await**: Full async implementation using `httpx` for non-blocking Okta API calls
@@ -188,7 +243,9 @@ curl http://localhost:8000/v1/users/12345
 -  **Con:** Errors happen after client receives response
 
 **Current mitigation:**
-- Comprehensive error logging
+- Kafka provides guaranteed message delivery and persistence
+- Dead letter queue captures failed messages for analysis
+- Comprehensive error logging with correlation IDs
 - Clients must poll GET `/v1/users/{id}` to verify success
 - 404 response indicates enrichment failed
 
@@ -278,7 +335,8 @@ curl http://localhost:8000/v1/users/12345
 - Python 3.10+
 - Windows PowerShell (examples provided) or any shell with `curl`
 - Redis (optional, for persistent storage)
-- Docker (optional, for containerized deployment)
+- Kafka + Zookeeper (for background processing)
+- Docker (recommended, for containerized deployment)
 - Jenkins (optional, for CI/CD)
 
 ### Project structure
@@ -290,11 +348,15 @@ app/
     users.py        # GET  /v1/users/{id}
   services/
     okta_loader.py  # Okta API client used by HR webhook enrichment
+    kafka_service.py # Kafka producer for publishing enrichment requests
+  kafka_config.py   # Kafka configuration and client initialization
   main.py           # App factory, logging, router inclusion, /v1/healthz
   schemas.py        # Pydantic models (HRUserIn, OktaUser, EnrichedUser)
-  dependencies.py   # get_user_store() DI provider
+  dependencies.py   # get_user_store() and get_kafka_producer() DI providers
   store.py          # UserStore (abstract), InMemoryUserStore, RedisUserStore
   config.py         # Settings with storage backend configuration
+workers/
+  enrichment_worker.py # Kafka consumer for processing enrichment requests
 data/
   hr_user.json           # Sample HR payload
 tests/
@@ -303,6 +365,7 @@ tests/
 requirements.txt
 requirements-dev.txt       # Development & testing dependencies
 README.md
+KAFKA_SETUP.md            # Kafka integration setup guide
 ENV_CONFIG_EXAMPLES.md     # Quick configuration examples
 REDIS_SETUP.md             # Detailed Redis setup guide
 JENKINS_SETUP.md           # CI/CD with Jenkins
@@ -310,7 +373,7 @@ DOCKER_DEPLOYMENT.md       # Docker deployment guide
 CICD_QUICK_REFERENCE.md    # Quick reference commands
 Jenkinsfile                # CI/CD pipeline definition
 Dockerfile                 # Container image definition
-docker-compose.yml         # Multi-container orchestration
+docker-compose.yml         # Multi-container orchestration (includes Kafka)
 ```
 
 ### Example payloads and responses

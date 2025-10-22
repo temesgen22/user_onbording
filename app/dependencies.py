@@ -3,10 +3,13 @@ import logging
 
 from .store import UserStore, InMemoryUserStore, RedisUserStore
 from .config import get_settings
+from .kafka_config import KafkaSettings, create_kafka_producer
+from .services.kafka_service import UserEnrichmentProducer
 
 logger = logging.getLogger(__name__)
 
 _user_store: Optional[UserStore] = None
+_kafka_producer: Optional[UserEnrichmentProducer] = None
 
 
 def init_user_store() -> UserStore:
@@ -47,5 +50,31 @@ def init_user_store() -> UserStore:
 def get_user_store() -> UserStore:
     """Get the global user store instance."""
     return init_user_store()
+
+
+def init_kafka_producer() -> UserEnrichmentProducer:
+    """Initialize Kafka producer (called on app startup)."""
+    global _kafka_producer
+    if _kafka_producer is None:
+        settings = KafkaSettings()
+        producer = create_kafka_producer(settings)
+        _kafka_producer = UserEnrichmentProducer(
+            producer=producer,
+            topic=settings.KAFKA_ENRICHMENT_TOPIC
+        )
+    return _kafka_producer
+
+
+def get_kafka_producer() -> UserEnrichmentProducer:
+    """Dependency to get Kafka enrichment producer."""
+    return init_kafka_producer()
+
+
+def close_kafka_producer():
+    """Close Kafka producer (called on app shutdown)."""
+    global _kafka_producer
+    if _kafka_producer:
+        _kafka_producer.close()
+        _kafka_producer = None
 
 

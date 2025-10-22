@@ -29,6 +29,7 @@ COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 # Copy application code
 COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser data/ ./data/
+COPY --chown=appuser:appuser workers/ ./workers/
 
 # Set PATH to include user site-packages
 ENV PATH=/home/appuser/.local/bin:$PATH
