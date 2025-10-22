@@ -155,6 +155,25 @@ async def process_enrichment_message(message_value: dict, store) -> tuple[bool, 
         return False, error_msg
         
     except Exception as e:
+        # Check if this is a RetryError from tenacity
+        if "RetryError" in str(type(e)):
+            # Extract the original exception from RetryError
+            original_error = getattr(e, 'last_attempt', None)
+            if original_error and hasattr(original_error, 'exception'):
+                original_exception = original_error.exception()
+                if isinstance(original_exception, OktaAPIError):
+                    error_msg = f"Okta API error after retries: {str(original_exception)}"
+                    logger.error(
+                        "Enrichment failed: API error after all retries",
+                        extra=scrub_pii({
+                            "employee_id": employee_id,
+                            "email": email,
+                            "error": str(original_exception),
+                            "correlation_id": correlation_id
+                        })
+                    )
+                    return False, error_msg
+        
         error_msg = f"Unexpected error: {str(e)}"
         logger.error(
             "Enrichment failed: Unexpected error",
@@ -181,7 +200,7 @@ async def publish_to_dlq(producer: Producer, dlq_topic: str, original_message: d
         
         producer.produce(
             topic=dlq_topic,
-            key=original_message.get("employee_id"),
+            key=original_message.get("employee_id").encode('utf-8') if original_message.get("employee_id") else None,
             value=json.dumps(dlq_message).encode('utf-8')
         )
         producer.flush(timeout=5)

@@ -69,9 +69,12 @@ def app(test_settings):
             with patch("app.config.get_settings", return_value=test_settings):
                 with patch("app.middleware.get_settings", return_value=test_settings):
                     with patch("app.dependencies.get_kafka_producer") as mock_kafka:
-                        # Mock Kafka producer dependency
-                        mock_kafka.return_value = MagicMock()
-                        return create_app()
+                        with patch("app.dependencies.get_user_store") as mock_user_store:
+                            # Mock Kafka producer dependency
+                            mock_kafka.return_value = MagicMock()
+                            # Mock user store dependency to use in-memory store
+                            mock_user_store.return_value = InMemoryUserStore()
+                            return create_app()
 
 
 @pytest.fixture
@@ -85,6 +88,16 @@ def client(app):
 def user_store():
     """Create a fresh in-memory user store for each test."""
     return InMemoryUserStore()
+
+
+@pytest.fixture
+def mock_user_store():
+    """Create a mocked user store for integration tests."""
+    store = MagicMock()
+    store.put = MagicMock()
+    store.get = MagicMock(return_value=None)
+    store.close = MagicMock()
+    return store
 
 
 @pytest.fixture
