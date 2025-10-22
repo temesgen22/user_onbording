@@ -12,11 +12,21 @@ pipeline {
         API_KEY = credentials('api-key')
         
         // Storage configuration
-        STORAGE_BACKEND = 'redis'  // or 'memory' for testing
-        REDIS_HOST = credentials('redis-host')
+        STORAGE_BACKEND = 'memory'  // Use memory for testing in Jenkins
+        REDIS_HOST = 'localhost'
         REDIS_PORT = '6379'
         REDIS_DB = '0'
-        REDIS_PASSWORD = credentials('redis-password')
+        REDIS_PASSWORD = ''
+        
+        // Test configuration
+        LOG_LEVEL = 'INFO'
+        LOG_FORMAT = 'text'
+        
+        // Kafka configuration for testing
+        KAFKA_BOOTSTRAP_SERVERS = 'localhost:9092'
+        KAFKA_ENRICHMENT_TOPIC = 'test.enrichment.requested'
+        KAFKA_DLQ_TOPIC = 'test.enrichment.failed'
+        KAFKA_CONSUMER_GROUP = 'test-enrichment-workers'
         
         // Python virtual environment
         VENV_DIR = '.venv'
@@ -65,6 +75,9 @@ pipeline {
                     # Install dependencies
                     pip install -r requirements.txt
                     
+                    # Install additional testing dependencies
+                    pip install pytest-html pytest-xdist || true
+                    
                     # Show installed packages
                     pip list
                 '''
@@ -105,6 +118,9 @@ pipeline {
                 sh '''
                     . ${VENV_DIR}/bin/activate
                     
+                    # Create test results directory
+                    mkdir -p test-results
+                    
                     # Run pytest with coverage
                     pytest tests/ \
                         --verbose \
@@ -112,7 +128,9 @@ pipeline {
                         --cov=app \
                         --cov-report=xml:coverage.xml \
                         --cov-report=html:coverage_html \
-                        --cov-report=term-missing
+                        --cov-report=term-missing \
+                        --tb=short \
+                        --maxfail=10
                 '''
             }
             post {
@@ -120,14 +138,21 @@ pipeline {
                     // Publish test results
                     junit 'test-results/junit.xml'
                     
-                    // Publish coverage report
-                    publishHTML([
-                        reportDir: 'coverage_html',
-                        reportFiles: 'index.html',
-                        reportName: 'Coverage Report',
-                        keepAll: true,
-                        alwaysLinkToLastBuild: true
-                    ])
+                    // Publish coverage report (only if it exists)
+                    script {
+                        if (fileExists('coverage_html/index.html')) {
+                            publishHTML([
+                                reportDir: 'coverage_html',
+                                reportFiles: 'index.html',
+                                reportName: 'Coverage Report',
+                                keepAll: true,
+                                alwaysLinkToLastBuild: true,
+                                allowMissing: true
+                            ])
+                        } else {
+                            echo 'Coverage HTML report not found, skipping HTML publication'
+                        }
+                    }
                 }
             }
         }
