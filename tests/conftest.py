@@ -64,17 +64,27 @@ def test_settings_redis():
 @pytest.fixture(scope="function")
 def app(test_settings):
     """Create a test FastAPI application with mocked settings."""
+    # Create a fresh in-memory store for each test
+    test_store = InMemoryUserStore()
+    
+    # Reset global state to ensure clean test environment
+    import app.dependencies
+    app.dependencies._user_store = None
+    app.dependencies._kafka_producer = None
+    
     with patch("app.main.init_settings", return_value=test_settings):
         with patch("app.main.get_settings", return_value=test_settings):
             with patch("app.config.get_settings", return_value=test_settings):
                 with patch("app.middleware.get_settings", return_value=test_settings):
                     with patch("app.dependencies.get_kafka_producer") as mock_kafka:
                         with patch("app.dependencies.get_user_store") as mock_user_store:
-                            # Mock Kafka producer dependency
-                            mock_kafka.return_value = MagicMock()
-                            # Mock user store dependency to use in-memory store
-                            mock_user_store.return_value = InMemoryUserStore()
-                            return create_app()
+                            with patch("app.dependencies.init_user_store") as mock_init_store:
+                                # Mock Kafka producer dependency
+                                mock_kafka.return_value = MagicMock()
+                                # Mock user store dependency to use in-memory store
+                                mock_user_store.return_value = test_store
+                                mock_init_store.return_value = test_store
+                                return create_app()
 
 
 @pytest.fixture
