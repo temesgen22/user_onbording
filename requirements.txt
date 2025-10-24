@@ -36,5 +36,6 @@ redis==6.4.0
 
 # Kafka for background task processing
 confluent-kafka==2.3.0
+pip install confluent-kafka
 
 

@@ -19,7 +19,6 @@ from .dependencies import init_user_store
 BASE_DIR = Path(__file__).resolve().parent.parent
 env_path = BASE_DIR / ".env"
 load_dotenv(dotenv_path=env_path)
-
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager

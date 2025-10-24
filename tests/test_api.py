@@ -127,18 +127,7 @@ class TestUsersEndpoint:
         okta_user = OktaUser(**sample_okta_user)
         enriched_user = EnrichedUser.from_sources(hr=hr_user, okta=okta_user)
         
-        # Store the user by making a request that will store it
-        # We'll use the webhook endpoint to store the user
-        from app.dependencies import get_kafka_producer
-        mock_producer = get_kafka_producer()
-        mock_producer.publish_enrichment_request = AsyncMock(return_value=True)
-        
-        # First, send webhook to store the user
-        webhook_response = client.post("/v1/hr/webhook", json=sample_hr_user)
-        assert webhook_response.status_code == 202
-        
-        # Now manually add the enriched user to the store for testing
-        # We need to patch the store to add our test data
+        # Mock the user store at the dependency level
         with patch('app.dependencies.get_user_store') as mock_get_store:
             mock_store = MagicMock()
             mock_store.get.return_value = enriched_user
